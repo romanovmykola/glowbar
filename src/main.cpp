@@ -578,7 +578,7 @@ void processAudio() {
           }
           uint8_t colData = 0;
           int head = (int)rainY[x];
-          if (head >= 0 && head < 8) colData |= (1 << (7 - head));              
+          if (head >= 0 && head < 8) colData |= (1 << (7 - head));             
           if (head - 1 >= 0 && head - 1 < 8) colData |= (1 << (7 - (head - 1))); 
           if (head - 3 >= 0 && head - 3 < 8) colData |= (1 << (7 - (head - 3))); 
           drawColumn(31 - x, colData);
@@ -589,12 +589,13 @@ void processAudio() {
       case 10: { 
         enum DecoderTheme { THEME_RAVE, THEME_ADEO };
         DecoderTheme currentTheme = THEME_ADEO; 
-        const int GLITCH_CHANCE = 15;                
-        const int SOLVE_CHANCE = 40;                 
-        const int MAX_BEATS_FALLBACK = 64;           
+        const int GLITCH_CHANCE = 15;                 
+        const int SOLVE_CHANCE = 40;                  
+        const int MAX_BEATS_FALLBACK = 64;            
         const unsigned long STICKY_DURATION = 600;  
 
-        static const uint8_t font5x8[26][5] = {
+        // Expanded font to 36 elements (A-Z, then 0-9)
+        static const uint8_t font5x8[36][5] = {
           {0xFE, 0x11, 0x11, 0x11, 0xFE}, // A
           {0xFF, 0x89, 0x89, 0x89, 0x76}, // B
           {0x7E, 0x81, 0x81, 0x81, 0x42}, // C
@@ -608,8 +609,7 @@ void processAudio() {
           {0xFF, 0x18, 0x24, 0x42, 0x81}, // K 
           {0xFF, 0x80, 0x80, 0x80, 0x80}, // L
           {0xFF, 0x02, 0x0C, 0x02, 0xFF}, // M 
-          //{0xFF, 0x06, 0x18, 0x60, 0xFF}, // N (Thicker diagonal bridge)
-          {0xFF, 0x04, 0x08, 0x10, 0xFF}, // N (Thinner diagonal bridge)
+          {0xFF, 0x04, 0x08, 0x10, 0xFF}, // N
           {0x7E, 0x81, 0x81, 0x81, 0x7E}, // O
           {0xFF, 0x11, 0x11, 0x11, 0x0E}, // P
           {0x7E, 0x81, 0xA1, 0x41, 0xBE}, // Q 
@@ -621,7 +621,18 @@ void processAudio() {
           {0x7F, 0x80, 0x70, 0x80, 0x7F}, // W 
           {0xC3, 0x24, 0x18, 0x24, 0xC3}, // X
           {0x07, 0x08, 0xF0, 0x08, 0x07}, // Y 
-          {0xE1, 0x91, 0x89, 0x85, 0x83}  // Z 
+          {0xE1, 0x91, 0x89, 0x85, 0x83}, // Z 
+          // --- NUMBERS (26 - 35) ---
+          {0x7E, 0x81, 0x81, 0x81, 0x7E}, // 0
+          {0x00, 0x82, 0xFF, 0x80, 0x00}, // 1
+          {0xE2, 0x91, 0x91, 0x91, 0x8E}, // 2
+          {0x42, 0x81, 0x89, 0x89, 0x76}, // 3
+          {0x0F, 0x08, 0x08, 0xFF, 0x08}, // 4
+          {0x4F, 0x89, 0x89, 0x89, 0x71}, // 5
+          {0x7E, 0x89, 0x89, 0x89, 0x72}, // 6
+          {0x01, 0x01, 0xF1, 0x09, 0x07}, // 7
+          {0x76, 0x89, 0x89, 0x89, 0x76}, // 8
+          {0x7E, 0x91, 0x91, 0x91, 0x3E}  // 9
         };
 
         static const char* raveWords[] = {
@@ -641,7 +652,7 @@ void processAudio() {
           "TEST", "LEAD", "GOAL", "TIME", "LOOP", "TASK", "PUSH", "PLAY", 
           "STEP", "SYNC", "MUST", "SOFT", "MINI", "NEXT", "SHIP", "WIRE", 
           "UXUX", "CLEV", "ZERO", "INFO", "NODE", "EPIC", "EDGE", "SCRM", 
-          "RANK", "ADEO", "LOIC", "DIMA", "ALEX", "FRAN", "KNOW", "LLMS", 
+          "RANK", "ADEO", "LOIC", "DIMA", "ALEX", "FC42", "KNOW", "LLMS", 
           "MCPS", "TUNE", "CHAT", "AGNT", "ROAD", "SPEC", "DEMO", "LMFR", 
           "HOME", "SHOP"
         };
@@ -667,12 +678,25 @@ void processAudio() {
         static bool hasCelebrated = false;             
         static bool isWordSticky = false;              
         static unsigned long wordSolvedTime = 0;       
+
+        // Helper functions to safely map characters to our 0-35 index ranges
+        auto charToIndex = [](char c) -> int {
+            if (c >= 'A' && c <= 'Z') return c - 'A';
+            if (c >= '0' && c <= '9') return c - '0' + 26;
+            return 0; // Default to 'A'
+        };
+
+        auto indexToChar = [](int idx) -> char {
+            if (idx >= 0 && idx <= 25) return 'A' + idx;
+            if (idx >= 26 && idx <= 35) return '0' + (idx - 26);
+            return 'A'; // Default
+        };
         
         auto isWordSafe = [&](int blockToChange, int newLetter) -> bool {
             char testStr[5];
             for(int i = 0; i < 4; i++) {
-                if (i == blockToChange) testStr[i] = (char)('A' + newLetter);
-                else testStr[i] = (char)('A' + blockLetters[i]);
+                if (i == blockToChange) testStr[i] = indexToChar(newLetter);
+                else testStr[i] = indexToChar(blockLetters[i]);
             }
             testStr[4] = '\0'; 
             for(int w = 0; w < numBannedWords; w++) {
@@ -685,7 +709,7 @@ void processAudio() {
         if (!initWords) {
             bool safe = false;
             while (!safe) {
-                for(int i = 0; i < 4; i++) blockLetters[i] = random(0, 26);
+                for(int i = 0; i < 4; i++) blockLetters[i] = random(0, 36); // Expanded random to 36
                 safe = isWordSafe(-1, 0); 
             }
             targetWordIdx = random(0, numWords);
@@ -722,7 +746,8 @@ void processAudio() {
               int correctBlocks[4]; int numCorrect = 0;
               int wrongBlocks[4];   int numWrong = 0;
               for (int i=0; i<4; i++) {
-                  if (blockLetters[i] == (activeWords[targetWordIdx][i] - 'A')) correctBlocks[numCorrect++] = i;
+                  // Replaced specific - 'A' math with our mapping helper
+                  if (blockLetters[i] == charToIndex(activeWords[targetWordIdx][i])) correctBlocks[numCorrect++] = i;
                   else wrongBlocks[numWrong++] = i;
               }
 
@@ -742,19 +767,19 @@ void processAudio() {
 
                   if (doGlitch) {
                       activeBlock = correctBlocks[random(0, numCorrect)];
-                      int targetLetter = activeWords[targetWordIdx][activeBlock] - 'A';
+                      int targetLetter = charToIndex(activeWords[targetWordIdx][activeBlock]);
                       int chaoticLetter;
-                      do { chaoticLetter = random(0, 26); } while (chaoticLetter == targetLetter || !isWordSafe(activeBlock, chaoticLetter));
+                      do { chaoticLetter = random(0, 36); } while (chaoticLetter == targetLetter || !isWordSafe(activeBlock, chaoticLetter));
                       blockLetters[activeBlock] = chaoticLetter;
                   } 
                   else {
                       activeBlock = wrongBlocks[random(0, numWrong)];
-                      int targetLetter = activeWords[targetWordIdx][activeBlock] - 'A';
+                      int targetLetter = charToIndex(activeWords[targetWordIdx][activeBlock]);
                       if (random(0, 100) < SOLVE_CHANCE) {
                           blockLetters[activeBlock] = targetLetter; 
                       } else {
                           int chaoticLetter;
-                          do { chaoticLetter = random(0, 26); } 
+                          do { chaoticLetter = random(0, 36); } 
                           while (chaoticLetter == blockLetters[activeBlock] || chaoticLetter == targetLetter || !isWordSafe(activeBlock, chaoticLetter));
                           blockLetters[activeBlock] = chaoticLetter;
                       }
