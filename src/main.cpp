@@ -653,7 +653,7 @@ void processAudio() {
           "STEP", "SYNC", "MUST", "SOFT", "MINI", "NEXT", "SHIP", "WIRE", 
           "UXUX", "CLEV", "ZERO", "INFO", "NODE", "EPIC", "EDGE", "SCRM", 
           "RANK", "ADEO", "LOIC", "DIMA", "ALEX", "FC42", "KNOW", "LLMS", 
-          "MCPS", "TUNE", "CHAT", "AGNT", "ROAD", "SPEC", "DEMO", "LMFR", 
+          "MCPS", "TUNE", "CHAT", "AGNT", "ROAD", "SPEC", "DEMO", "PMUX", 
           "HOME", "SHOP"
         };
         static const int numAdeoWords = 58;
