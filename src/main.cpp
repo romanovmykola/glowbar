@@ -651,7 +651,7 @@ void processAudio() {
           "USER", "OPEN", "TECH", "TEAM", "PLAN", "CART", "PROD", "LMUA", 
           "TEST", "LEAD", "GOAL", "TIME", "LOOP", "TASK", "PUSH", "PLAY", 
           "STEP", "SYNC", "MUST", "SOFT", "MINI", "NEXT", "SHIP", "WIRE", 
-          "UXUX", "CLEV", "ZERO", "INFO", "NODE", "EPIC", "EDGE", "SCRM", 
+          "UXUX", "SPRK", "ZERO", "INFO", "NODE", "EPIC", "EDGE", "SCRM", 
           "RANK", "ADEO", "LOIC", "DIMA", "ALEX", "FC42", "KNOW", "LLMS", 
           "MCPS", "TUNE", "CHAT", "AGNT", "ROAD", "SPEC", "DEMO", "PMUX", 
           "HOME", "SHOP"
