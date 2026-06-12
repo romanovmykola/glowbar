@@ -5,6 +5,7 @@
 It features a one-button touch interface, 11 unique animations, a built-in battery, and completely wireless Over-The-Air (OTA) firmware updates.
 
 [![GlowBar Showcase](https://img.youtube.com/vi/lLxH43aJjio/0.jpg)](https://youtu.be/lLxH43aJjio)
+
 *(Click the image above to watch the full video breakdown, teardown, and flashing guide)*
 
 ---
