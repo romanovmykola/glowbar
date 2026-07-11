@@ -88,6 +88,8 @@ unsigned long lastTapTime = 0;
 int modeBeforeTaps = 0;
 const unsigned long TAP_TIMEOUT = 500; 
 
+bool pomodoroPaused = false; // Tracks if Pomodoro timer is paused
+
 struct Particle { float x, y, vy; bool active; };
 struct Star { float x, y, z; };
 
@@ -811,30 +813,40 @@ void processAudio() {
         break;
       }
       
-case 11: { // POMODORO TIMER MODE
+      case 11: { // POMODORO TIMER MODE
           static unsigned long p_lastTick = 0;
           static unsigned long p_timeRemaining = 25 * 60 * 1000; 
-          static int p_phase = 0; // 0=Work, 1=Alarm(Work), 2=Break, 3=Alarm(Break)
+          static int p_phase = -1; // -1=Init, 0=Work, 1=Alarm(Work), 2=Break, 3=Alarm(Break)
           static unsigned long p_alarmStart = 0;
+          static unsigned long p_modeEnterTime = 0;
 
-          // If we just entered this mode, reset to a fresh 25-min Work session
+          // If we just entered this mode, reset everything
           if (modeChanged) {
               p_timeRemaining = 25 * 60 * 1000;
-              p_phase = 0;
+              p_phase = -1;
               p_lastTick = millis();
+              p_modeEnterTime = millis();
+              pomodoroPaused = false; 
           }
 
           unsigned long now = millis();
 
           // Timing & Auto-Transition Logic
-          if (p_phase == 0 || p_phase == 2) {
+          if (p_phase == -1) {
+              p_lastTick = now;
+              if (now - p_modeEnterTime >= 2000) {
+                  p_phase = 0;
+              }
+          } else if (p_phase == 0 || p_phase == 2) {
               unsigned long delta = now - p_lastTick;
-              if (delta <= p_timeRemaining) {
-                  p_timeRemaining -= delta;
-              } else {
-                  p_timeRemaining = 0;
-                  p_phase++; // Move to the respective alarm phase
-                  p_alarmStart = now;
+              if (!pomodoroPaused) {
+                  if (delta <= p_timeRemaining) {
+                      p_timeRemaining -= delta;
+                  } else {
+                      p_timeRemaining = 0;
+                      p_phase++; // Move to alarm phase
+                      p_alarmStart = now;
+                  }
               }
               p_lastTick = now;
           } else {
@@ -853,40 +865,70 @@ case 11: { // POMODORO TIMER MODE
 
           uint8_t buffer[32] = {0};
 
-          // 1. Calculate Sandclock Bars based on current phase total time
-          float maxTime = (p_phase <= 1) ? (25.0 * 60.0 * 1000.0) : (5.0 * 60.0 * 1000.0);
-          float fraction = (float)p_timeRemaining / maxTime;
+          // 1. Calculate Sandclock Bars 
+          float maxTime = (p_phase >= 2) ? (5.0 * 60.0 * 1000.0) : (25.0 * 60.0 * 1000.0);
+          float fraction;
+          
+          if (p_phase >= 2) {
+              // Break phase: progress bar fills up over time
+              fraction = 1.0 - ((float)p_timeRemaining / maxTime);
+          } else {
+              // Focus phase (-1 or 0): progress bar depletes
+              fraction = (float)p_timeRemaining / maxTime;
+          }
+
           int activeRows = ceil(fraction * 8.0); 
           uint8_t barCol = 0;
           for (int y = 0; y < activeRows; y++) {
               barCol |= (1 << (7 - y)); 
           }
 
-          // 2. Evaluate Blinking Logic for the Bars (Final 10% of phase)
+          // 2. Blinking Logic for Bars (Final 10% of Focus Phase only)
           bool showBars = true;
-          if ((p_phase == 0 || p_phase == 2) && p_timeRemaining <= (maxTime * 0.1) && p_timeRemaining > 0) {
+          if (p_phase == 0 && p_timeRemaining <= (maxTime * 0.1) && p_timeRemaining > 0 && !pomodoroPaused) {
               float urgency = 1.0 - ((float)p_timeRemaining / (maxTime * 0.1));
               int blinkInterval = 1000 - (urgency * 850); 
               if ((millis() % blinkInterval) > (blinkInterval / 2)) {
                   showBars = false;
               }
+          } else if (p_phase == 1) {
+              showBars = false; // Hide completely after focus
+          } else if (p_phase == 3) {
+              showBars = ((millis() % 500) < 250); // Flash simultaneously with text after break
           }
 
-          // Hide bars entirely during the 10-second transition alarms
-          if (showBars && p_phase != 1 && p_phase != 3) {
+          if (showBars) {
               buffer[0] = barCol; buffer[1] = barCol;
               buffer[30] = barCol; buffer[31] = barCol;
           }
 
-          // 3. Render the Text Elements
+          // 3. Render Text Elements
           int mins = p_timeRemaining / 60000;
           int secs = (p_timeRemaining % 60000) / 1000;
           int m1 = mins / 10; int m2 = mins % 10;
           int s1 = secs / 10; int s2 = secs % 10;
 
           bool showText = true;
+          bool showColon = true;
+
           if (p_phase == 1 || p_phase == 3) {
-              showText = ((millis() % 500) < 250); // Flash text rapidly during alarm
+              // 10-sec Alarm: Flash 00:00 and colon together rapidly
+              showText = ((millis() % 500) < 250); 
+              showColon = showText;
+          } else if (pomodoroPaused && p_phase != -1) {
+              // Paused: Slowly flash everything to indicate paused state
+              showText = ((millis() % 1000) < 500);
+              showColon = showText;
+          } else {
+              // Running Mode
+              showText = true;
+              if (p_phase == 0 && p_timeRemaining <= 2 * 60 * 1000) {
+                  // Last 2 minutes of focus: flash colon
+                  showColon = ((millis() % 1000) < 500);
+              } else {
+                  // Normal focus, Break phase, or Initializing: solid colon
+                  showColon = true;
+              }
           }
 
           static const uint8_t numFont[10][4] = {
@@ -903,8 +945,6 @@ case 11: { // POMODORO TIMER MODE
                   buffer[19+i] = numFont[s1][i];
                   buffer[24+i] = numFont[s2][i];
               }
-              // Blink colon every second while running
-              bool showColon = (p_phase == 0 || p_phase == 2) ? ((millis() % 1000) < 500) : true;
               if (showColon) {
                   buffer[15] = 0x66;
                   buffer[16] = 0x66; 
@@ -921,7 +961,7 @@ case 11: { // POMODORO TIMER MODE
           }
           break;
       }
-    } // <-- This brace closes the switch(currentMode) statement
+    }
     
     // Brightness override logic
     if (currentMode != 10 && currentMode != 11) { 
@@ -953,8 +993,8 @@ case 11: { // POMODORO TIMER MODE
     }
 
     mx.control(MD_MAX72XX::UPDATE, MD_MAX72XX::ON); 
-  } // <-- This brace closes the if (result == ESP_OK) statement
-} // <-- This brace finally closes the void processAudio() function
+  }
+}
 
 // ================= ARDUINO MAIN LOOP =================
 void loop() {
@@ -1140,26 +1180,35 @@ void loop() {
       } 
       else if (currentTouchState == LOW && lastTouchState == HIGH) {
         if (!isLongPressHandled) {
-          if (millis() - lastTapTime > TAP_TIMEOUT) {
-             tapCount = 1;
-             modeBeforeTaps = currentMode; 
-          } else { tapCount++; }
+          unsigned long pressDuration = millis() - touchStartTime;
           
-          lastTapTime = millis();
-
-          if (tapCount == 5) {
-             inSettingsMenu = true;
-             settingsEnterTime = millis();
-             tapCount = 0;
-             currentMode = modeBeforeTaps; 
-             mx.clear(); 
-             mx.control(MD_MAX72XX::INTENSITY, globalMaxBrightness); 
+          // If we are in Pomodoro mode AND held for at least 400ms (but less than the 800ms sleep limit)
+          if (currentMode == 11 && pressDuration >= 400) {
+              pomodoroPaused = !pomodoroPaused;
           } 
           else {
-             currentMode++;
-             if (currentMode > 11) currentMode = 0; 
-             preferences.putUInt("mode", currentMode); 
-             mx.clear(); 
+              // Standard tap logic
+              if (millis() - lastTapTime > TAP_TIMEOUT) {
+                 tapCount = 1;
+                 modeBeforeTaps = currentMode; 
+              } else { tapCount++; }
+              
+              lastTapTime = millis();
+
+              if (tapCount == 5) {
+                 inSettingsMenu = true;
+                 settingsEnterTime = millis();
+                 tapCount = 0;
+                 currentMode = modeBeforeTaps; 
+                 mx.clear(); 
+                 mx.control(MD_MAX72XX::INTENSITY, globalMaxBrightness); 
+              } 
+              else {
+                 currentMode++;
+                 if (currentMode > 11) currentMode = 0; 
+                 preferences.putUInt("mode", currentMode); 
+                 mx.clear(); 
+              }
           }
         }
       }
