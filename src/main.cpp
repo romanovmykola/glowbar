@@ -1,8 +1,8 @@
 #include <Arduino.h>
 #include <driver/i2s.h>         // ESP32 hardware library for reading I2S digital audio
 #include <MD_MAX72xx.h>         // Library for controlling the MAX7219 LED matrices
-#include <arduinoFFT.h>         // Mathematical library to convert raw audio into frequency bands (Bass, Treble, etc.)
-#include <Preferences.h>        // ESP32 library to save data (like the current mode) permanently to flash memory
+#include <arduinoFFT.h>         // Mathematical library to convert raw audio into frequency bands
+#include <Preferences.h>        // ESP32 library to save data permanently to flash memory
 #include "esp_sleep.h"          // ESP32 library for power-saving sleep modes
 #include "driver/gpio.h"        // ESP32 hardware pin control
 
@@ -87,6 +87,8 @@ int tapCount = 0;
 unsigned long lastTapTime = 0;
 int modeBeforeTaps = 0;
 const unsigned long TAP_TIMEOUT = 500; 
+
+bool pomodoroPaused = false; // Tracks if Pomodoro timer is paused
 
 struct Particle { float x, y, vy; bool active; };
 struct Star { float x, y, z; };
@@ -202,7 +204,7 @@ void setup() {
 
   preferences.begin("glowbar", false);
   currentMode = preferences.getUInt("mode", 0);
-  if (currentMode > 10) currentMode = 0; 
+  if (currentMode > 11) currentMode = 0; 
   
   rotateScreen = preferences.getBool("rotate", true); 
   globalMaxBrightness = preferences.getUInt("maxBri", 15);
@@ -264,6 +266,11 @@ void processAudio() {
       delay(15);
       return; 
   }
+
+  // Detect mode changes for specific modules (like Pomodoro reset)
+  static int lastKnownMode = -1;
+  bool modeChanged = (currentMode != lastKnownMode);
+  lastKnownMode = currentMode;
 
   size_t bytesIn = 0;
   esp_err_t result = i2s_read(I2S_PORT, &i2sData, sizeof(int32_t) * SAMPLES, &bytesIn, portMAX_DELAY);
@@ -578,7 +585,7 @@ void processAudio() {
           }
           uint8_t colData = 0;
           int head = (int)rainY[x];
-          if (head >= 0 && head < 8) colData |= (1 << (7 - head));              
+          if (head >= 0 && head < 8) colData |= (1 << (7 - head));             
           if (head - 1 >= 0 && head - 1 < 8) colData |= (1 << (7 - (head - 1))); 
           if (head - 3 >= 0 && head - 3 < 8) colData |= (1 << (7 - (head - 3))); 
           drawColumn(31 - x, colData);
@@ -589,12 +596,12 @@ void processAudio() {
       case 10: { 
         enum DecoderTheme { THEME_RAVE, THEME_ADEO };
         DecoderTheme currentTheme = THEME_ADEO; 
-        const int GLITCH_CHANCE = 15;                
-        const int SOLVE_CHANCE = 40;                 
-        const int MAX_BEATS_FALLBACK = 64;           
+        const int GLITCH_CHANCE = 15;                  
+        const int SOLVE_CHANCE = 40;                  
+        const int MAX_BEATS_FALLBACK = 64;            
         const unsigned long STICKY_DURATION = 600;  
 
-        static const uint8_t font5x8[26][5] = {
+        static const uint8_t font5x8[36][5] = {
           {0xFE, 0x11, 0x11, 0x11, 0xFE}, // A
           {0xFF, 0x89, 0x89, 0x89, 0x76}, // B
           {0x7E, 0x81, 0x81, 0x81, 0x42}, // C
@@ -608,8 +615,7 @@ void processAudio() {
           {0xFF, 0x18, 0x24, 0x42, 0x81}, // K 
           {0xFF, 0x80, 0x80, 0x80, 0x80}, // L
           {0xFF, 0x02, 0x0C, 0x02, 0xFF}, // M 
-          //{0xFF, 0x06, 0x18, 0x60, 0xFF}, // N (Thicker diagonal bridge)
-          {0xFF, 0x04, 0x08, 0x10, 0xFF}, // N (Thinner diagonal bridge)
+          {0xFF, 0x04, 0x08, 0x10, 0xFF}, // N
           {0x7E, 0x81, 0x81, 0x81, 0x7E}, // O
           {0xFF, 0x11, 0x11, 0x11, 0x0E}, // P
           {0x7E, 0x81, 0xA1, 0x41, 0xBE}, // Q 
@@ -621,7 +627,17 @@ void processAudio() {
           {0x7F, 0x80, 0x70, 0x80, 0x7F}, // W 
           {0xC3, 0x24, 0x18, 0x24, 0xC3}, // X
           {0x07, 0x08, 0xF0, 0x08, 0x07}, // Y 
-          {0xE1, 0x91, 0x89, 0x85, 0x83}  // Z 
+          {0xE1, 0x91, 0x89, 0x85, 0x83}, // Z 
+          {0x7E, 0x81, 0x81, 0x81, 0x7E}, // 0
+          {0x00, 0x82, 0xFF, 0x80, 0x00}, // 1
+          {0xE2, 0x91, 0x91, 0x91, 0x8E}, // 2
+          {0x42, 0x81, 0x89, 0x89, 0x76}, // 3
+          {0x0F, 0x08, 0x08, 0xFF, 0x08}, // 4
+          {0x4F, 0x89, 0x89, 0x89, 0x71}, // 5
+          {0x7E, 0x89, 0x89, 0x89, 0x72}, // 6
+          {0x01, 0x01, 0xF1, 0x09, 0x07}, // 7
+          {0x76, 0x89, 0x89, 0x89, 0x76}, // 8
+          {0x4E, 0x91, 0x91, 0x91, 0x7E}  // 9
         };
 
         static const char* raveWords[] = {
@@ -640,9 +656,9 @@ void processAudio() {
           "USER", "OPEN", "TECH", "TEAM", "PLAN", "CART", "PROD", "LMUA", 
           "TEST", "LEAD", "GOAL", "TIME", "LOOP", "TASK", "PUSH", "PLAY", 
           "STEP", "SYNC", "MUST", "SOFT", "MINI", "NEXT", "SHIP", "WIRE", 
-          "UXUX", "CLEV", "ZERO", "INFO", "NODE", "EPIC", "EDGE", "SCRM", 
-          "RANK", "ADEO", "LOIC", "DIMA", "ALEX", "FRAN", "KNOW", "LLMS", 
-          "MCPS", "TUNE", "CHAT", "AGNT", "ROAD", "SPEC", "DEMO", "LMFR", 
+          "UXUX", "SPRK", "ZERO", "INFO", "NODE", "EPIC", "EDGE", "SCRM", 
+          "RANK", "ADEO", "LOIC", "DIMA", "ALEX", "FC42", "KNOW", "LLMS", 
+          "MCPS", "TUNE", "CHAT", "AGNT", "ROAD", "SPEC", "DEMO", "PMUX", 
           "HOME", "SHOP"
         };
         static const int numAdeoWords = 58;
@@ -667,12 +683,24 @@ void processAudio() {
         static bool hasCelebrated = false;             
         static bool isWordSticky = false;              
         static unsigned long wordSolvedTime = 0;       
+
+        auto charToIndex = [](char c) -> int {
+            if (c >= 'A' && c <= 'Z') return c - 'A';
+            if (c >= '0' && c <= '9') return c - '0' + 26;
+            return 0; // Default to 'A'
+        };
+
+        auto indexToChar = [](int idx) -> char {
+            if (idx >= 0 && idx <= 25) return 'A' + idx;
+            if (idx >= 26 && idx <= 35) return '0' + (idx - 26);
+            return 'A'; // Default
+        };
         
         auto isWordSafe = [&](int blockToChange, int newLetter) -> bool {
             char testStr[5];
             for(int i = 0; i < 4; i++) {
-                if (i == blockToChange) testStr[i] = (char)('A' + newLetter);
-                else testStr[i] = (char)('A' + blockLetters[i]);
+                if (i == blockToChange) testStr[i] = indexToChar(newLetter);
+                else testStr[i] = indexToChar(blockLetters[i]);
             }
             testStr[4] = '\0'; 
             for(int w = 0; w < numBannedWords; w++) {
@@ -685,7 +713,7 @@ void processAudio() {
         if (!initWords) {
             bool safe = false;
             while (!safe) {
-                for(int i = 0; i < 4; i++) blockLetters[i] = random(0, 26);
+                for(int i = 0; i < 4; i++) blockLetters[i] = random(0, 36);
                 safe = isWordSafe(-1, 0); 
             }
             targetWordIdx = random(0, numWords);
@@ -722,7 +750,7 @@ void processAudio() {
               int correctBlocks[4]; int numCorrect = 0;
               int wrongBlocks[4];   int numWrong = 0;
               for (int i=0; i<4; i++) {
-                  if (blockLetters[i] == (activeWords[targetWordIdx][i] - 'A')) correctBlocks[numCorrect++] = i;
+                  if (blockLetters[i] == charToIndex(activeWords[targetWordIdx][i])) correctBlocks[numCorrect++] = i;
                   else wrongBlocks[numWrong++] = i;
               }
 
@@ -742,19 +770,19 @@ void processAudio() {
 
                   if (doGlitch) {
                       activeBlock = correctBlocks[random(0, numCorrect)];
-                      int targetLetter = activeWords[targetWordIdx][activeBlock] - 'A';
+                      int targetLetter = charToIndex(activeWords[targetWordIdx][activeBlock]);
                       int chaoticLetter;
-                      do { chaoticLetter = random(0, 26); } while (chaoticLetter == targetLetter || !isWordSafe(activeBlock, chaoticLetter));
+                      do { chaoticLetter = random(0, 36); } while (chaoticLetter == targetLetter || !isWordSafe(activeBlock, chaoticLetter));
                       blockLetters[activeBlock] = chaoticLetter;
                   } 
                   else {
                       activeBlock = wrongBlocks[random(0, numWrong)];
-                      int targetLetter = activeWords[targetWordIdx][activeBlock] - 'A';
+                      int targetLetter = charToIndex(activeWords[targetWordIdx][activeBlock]);
                       if (random(0, 100) < SOLVE_CHANCE) {
                           blockLetters[activeBlock] = targetLetter; 
                       } else {
                           int chaoticLetter;
-                          do { chaoticLetter = random(0, 26); } 
+                          do { chaoticLetter = random(0, 36); } 
                           while (chaoticLetter == blockLetters[activeBlock] || chaoticLetter == targetLetter || !isWordSafe(activeBlock, chaoticLetter));
                           blockLetters[activeBlock] = chaoticLetter;
                       }
@@ -784,9 +812,159 @@ void processAudio() {
         }
         break;
       }
+      
+      case 11: { // POMODORO TIMER MODE
+          static unsigned long p_lastTick = 0;
+          static unsigned long p_timeRemaining = 25 * 60 * 1000; 
+          static int p_phase = -1; // -1=Init, 0=Work, 1=Alarm(Work), 2=Break, 3=Alarm(Break)
+          static unsigned long p_alarmStart = 0;
+          static unsigned long p_modeEnterTime = 0;
+
+          // If we just entered this mode, reset everything
+          if (modeChanged) {
+              p_timeRemaining = 25 * 60 * 1000;
+              p_phase = -1;
+              p_lastTick = millis();
+              p_modeEnterTime = millis();
+              pomodoroPaused = false; 
+          }
+
+          unsigned long now = millis();
+
+          // Timing & Auto-Transition Logic
+          if (p_phase == -1) {
+              p_lastTick = now;
+              if (now - p_modeEnterTime >= 2000) {
+                  p_phase = 0;
+              }
+          } else if (p_phase == 0 || p_phase == 2) {
+              unsigned long delta = now - p_lastTick;
+              if (!pomodoroPaused) {
+                  if (delta <= p_timeRemaining) {
+                      p_timeRemaining -= delta;
+                  } else {
+                      p_timeRemaining = 0;
+                      p_phase++; // Move to alarm phase
+                      p_alarmStart = now;
+                  }
+              }
+              p_lastTick = now;
+          } else {
+              p_lastTick = now; 
+              // Auto-advance after 10 seconds of alarm flashing
+              if (now - p_alarmStart > 10000) {
+                  if (p_phase == 1) {
+                      p_phase = 2; // Start Break
+                      p_timeRemaining = 5 * 60 * 1000;
+                  } else {
+                      p_phase = 0; // Start Work
+                      p_timeRemaining = 25 * 60 * 1000;
+                  }
+              }
+          }
+
+          uint8_t buffer[32] = {0};
+
+          // 1. Calculate Sandclock Bars 
+          float maxTime = (p_phase >= 2) ? (5.0 * 60.0 * 1000.0) : (25.0 * 60.0 * 1000.0);
+          float fraction;
+          
+          if (p_phase >= 2) {
+              // Break phase: progress bar fills up over time
+              fraction = 1.0 - ((float)p_timeRemaining / maxTime);
+          } else {
+              // Focus phase (-1 or 0): progress bar depletes
+              fraction = (float)p_timeRemaining / maxTime;
+          }
+
+          int activeRows = ceil(fraction * 8.0); 
+          uint8_t barCol = 0;
+          for (int y = 0; y < activeRows; y++) {
+              barCol |= (1 << (7 - y)); 
+          }
+
+          // 2. Blinking Logic for Bars (Final 10% of Focus Phase only)
+          bool showBars = true;
+          if (p_phase == 0 && p_timeRemaining <= (maxTime * 0.1) && p_timeRemaining > 0 && !pomodoroPaused) {
+              float urgency = 1.0 - ((float)p_timeRemaining / (maxTime * 0.1));
+              int blinkInterval = 1000 - (urgency * 850); 
+              if ((millis() % blinkInterval) > (blinkInterval / 2)) {
+                  showBars = false;
+              }
+          } else if (p_phase == 1) {
+              showBars = false; // Hide completely after focus
+          } else if (p_phase == 3) {
+              showBars = ((millis() % 500) < 250); // Flash simultaneously with text after break
+          }
+
+          if (showBars) {
+              buffer[0] = barCol; buffer[1] = barCol;
+              buffer[30] = barCol; buffer[31] = barCol;
+          }
+
+          // 3. Render Text Elements
+          int mins = p_timeRemaining / 60000;
+          int secs = (p_timeRemaining % 60000) / 1000;
+          int m1 = mins / 10; int m2 = mins % 10;
+          int s1 = secs / 10; int s2 = secs % 10;
+
+          bool showText = true;
+          bool showColon = true;
+
+          if (p_phase == 1 || p_phase == 3) {
+              // 10-sec Alarm: Flash 00:00 and colon together rapidly
+              showText = ((millis() % 500) < 250); 
+              showColon = showText;
+          } else if (pomodoroPaused && p_phase != -1) {
+              // Paused: Slowly flash everything to indicate paused state
+              showText = ((millis() % 1000) < 500);
+              showColon = showText;
+          } else {
+              // Running Mode
+              showText = true;
+              if (p_phase == 0 && p_timeRemaining <= 2 * 60 * 1000) {
+                  // Last 2 minutes of focus: flash colon
+                  showColon = ((millis() % 1000) < 500);
+              } else {
+                  // Normal focus, Break phase, or Initializing: solid colon
+                  showColon = true;
+              }
+          }
+
+          static const uint8_t numFont[10][4] = {
+            {0xFF, 0x81, 0x81, 0xFF}, {0x00, 0x82, 0xFF, 0x80}, {0xF9, 0x89, 0x89, 0x8F},
+            {0x89, 0x89, 0x89, 0xFF}, {0x0F, 0x08, 0x08, 0xFF}, {0x8F, 0x89, 0x89, 0xF9},
+            {0xFF, 0x89, 0x89, 0xF9}, {0x01, 0x01, 0x01, 0xFF}, {0xFF, 0x89, 0x89, 0xFF},
+            {0x8F, 0x89, 0x89, 0xFF}  
+          };
+
+          if (showText) {
+              for(int i=0; i<4; i++) {
+                  buffer[4+i]  = numFont[m1][i];
+                  buffer[9+i]  = numFont[m2][i];
+                  buffer[19+i] = numFont[s1][i];
+                  buffer[24+i] = numFont[s2][i];
+              }
+              if (showColon) {
+                  buffer[15] = 0x66;
+                  buffer[16] = 0x66; 
+              }
+          }
+
+          // 4. Output to Matrix
+          for (int x = 0; x < 32; x++) {
+              uint8_t colData = buffer[x];
+              colData = (colData & 0xF0) >> 4 | (colData & 0x0F) << 4;
+              colData = (colData & 0xCC) >> 2 | (colData & 0x33) << 2;
+              colData = (colData & 0xAA) >> 1 | (colData & 0x55) << 1;
+              drawColumn(x, colData); 
+          }
+          break;
+      }
     }
     
-    if (currentMode != 10) { 
+    // Brightness override logic
+    if (currentMode != 10 && currentMode != 11) { 
         int idleBrightness = globalIdleBrightness;                 
         int maxBrightness = globalMaxBrightness;
         int intendedBrightness = idleBrightness;
@@ -809,6 +987,9 @@ void processAudio() {
             if (currentBrightness < idleBrightness) currentBrightness = idleBrightness;
         }
         mx.control(MD_MAX72XX::INTENSITY, constrain((int)currentBrightness, idleBrightness, maxBrightness));
+    } else if (currentMode == 11) {
+        // Pomodoro Mode maintains steady global max brightness
+        mx.control(MD_MAX72XX::INTENSITY, globalMaxBrightness);
     }
 
     mx.control(MD_MAX72XX::UPDATE, MD_MAX72XX::ON); 
@@ -999,26 +1180,35 @@ void loop() {
       } 
       else if (currentTouchState == LOW && lastTouchState == HIGH) {
         if (!isLongPressHandled) {
-          if (millis() - lastTapTime > TAP_TIMEOUT) {
-             tapCount = 1;
-             modeBeforeTaps = currentMode; 
-          } else { tapCount++; }
+          unsigned long pressDuration = millis() - touchStartTime;
           
-          lastTapTime = millis();
-
-          if (tapCount == 5) {
-             inSettingsMenu = true;
-             settingsEnterTime = millis();
-             tapCount = 0;
-             currentMode = modeBeforeTaps; 
-             mx.clear(); 
-             mx.control(MD_MAX72XX::INTENSITY, globalMaxBrightness); 
+          // If we are in Pomodoro mode AND held for at least 400ms (but less than the 800ms sleep limit)
+          if (currentMode == 11 && pressDuration >= 400) {
+              pomodoroPaused = !pomodoroPaused;
           } 
           else {
-             currentMode++;
-             if (currentMode > 10) currentMode = 0; 
-             preferences.putUInt("mode", currentMode); 
-             mx.clear(); 
+              // Standard tap logic
+              if (millis() - lastTapTime > TAP_TIMEOUT) {
+                 tapCount = 1;
+                 modeBeforeTaps = currentMode; 
+              } else { tapCount++; }
+              
+              lastTapTime = millis();
+
+              if (tapCount == 5) {
+                 inSettingsMenu = true;
+                 settingsEnterTime = millis();
+                 tapCount = 0;
+                 currentMode = modeBeforeTaps; 
+                 mx.clear(); 
+                 mx.control(MD_MAX72XX::INTENSITY, globalMaxBrightness); 
+              } 
+              else {
+                 currentMode++;
+                 if (currentMode > 11) currentMode = 0; 
+                 preferences.putUInt("mode", currentMode); 
+                 mx.clear(); 
+              }
           }
         }
       }
@@ -1030,7 +1220,7 @@ void loop() {
   if (Serial.available() > 0) {
     String incomingStr = Serial.readStringUntil('\n');
     int newMode = incomingStr.toInt() - 1; 
-    if (newMode >= 0 && newMode <= 10 && currentMode != newMode) { 
+    if (newMode >= 0 && newMode <= 11 && currentMode != newMode) { 
       currentMode = newMode;
       preferences.putUInt("mode", currentMode); 
       mx.clear();
